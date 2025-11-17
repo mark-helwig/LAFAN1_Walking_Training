@@ -104,6 +104,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--file_name', type=str, help="File name", default='dance1_subject2')
     parser.add_argument('--robot_type', type=str, help="Robot type", default='g1')
+    parser.add_argument('--start_frame', type=int, help="Start frame", default=0)
     args = parser.parse_args()
 
     rr.init(
@@ -114,8 +115,11 @@ if __name__ == "__main__":
 
     file_name = args.file_name
     robot_type = args.robot_type
+    start_frame = args.start_frame
     csv_files = robot_type + '/' + file_name + '.csv'
     data = np.genfromtxt(csv_files, delimiter=',')
+    data = data[start_frame:, :]
+
 
     rerun_urdf = RerunURDF(robot_type)
     for frame_nr in range(data.shape[0]):

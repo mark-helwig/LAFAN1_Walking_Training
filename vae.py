@@ -95,7 +95,7 @@ class VAE(torch.nn.Module):
 
     def decode(self, input: torch.Tensor) -> torch.Tensor:
         return self.decoder(input)
-    
+        
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std, device=self.device)
@@ -313,3 +313,21 @@ class LinearVAE(torch.nn.Module):
         loss = reconstruction_loss + kld_weight * kld_loss
         return {"loss" : loss, "reconstruction" : reconstruction_loss.detach(), "kld" : kld_loss.detach()}
     
+    def sample(self, num_samples: int, return_latent: bool = False) -> torch.Tensor:
+        """Sample decoded tensors from the LinearVAE latent space.
+
+        Args:
+            num_samples: number of samples to draw from N(0, I)
+            return_latent: if True, return a tuple (decoded, z) where z is the sampled latent tensor
+
+        Returns:
+            decoded tensors with shape (num_samples, in_channels, in_h, in_w), or
+            (decoded, z) if return_latent is True where z has shape (num_samples, latent_dim)
+        """
+        z = torch.randn(num_samples, self.latent_dim, device=getattr(self, "device", None) or torch.device("cpu"))
+        with torch.no_grad():
+            decoded_flat = self.decoder(z)
+            decoded = decoded_flat.unflatten(1, (self.in_channels, self.in_h, self.in_w))
+        if return_latent:
+            return decoded, z
+        return decoded
