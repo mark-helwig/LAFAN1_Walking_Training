@@ -45,7 +45,6 @@ class RobotMovementDataset(Dataset):
             data = pd.concat([data, file_data], ignore_index=True)
             lengths.append(len(data))
         data.to_csv('dataset.csv', index=False)
-        print(data.columns)
         return data, lengths
     
     def __len__(self):

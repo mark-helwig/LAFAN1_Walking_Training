@@ -1,4 +1,4 @@
-    import torch
+import torch
 import torchvision
 import numpy as np
 import pandas as pd
@@ -13,20 +13,11 @@ torch.manual_seed(0)
 
 # from LAFAN1_VAE_Experiment import ROOT_DIR
 from vae import LinearVAE, VAE
+from latentDynamics import ResidualLatentDynamics, LatentMLPDynamics
 import utils
 from RobotMovementDataset import RobotMovementDataset
 
-def get_filenames_in_folder(folder_path):
-    """
-    Retrieves a list of filenames within a specified folder.
-
-    Args:
-        folder_path (str): The path to the folder.
-
-    Returns:
-        list: A list containing the names of files in the folder.
-              Returns an empty list if the folder does not exist or is empty.
-    """
+def get_walking_filenames_in_folder(folder_path):
     try:
         filenames = os.listdir(folder_path)
         # You can optionally filter for files only, excluding subdirectories
@@ -42,14 +33,15 @@ def get_filenames_in_folder(folder_path):
 if __name__ == "__main__":
 
     folder_path = "LAFAN1_Retargeting_Dataset/g1/"
-    filenames = get_filenames_in_folder(folder_path)
+    filenames = get_walking_filenames_in_folder(folder_path)
     
-            
+    encoder_filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/generated/model_12_files_1000_epochs.pth'
+
 
     normalize = False
-    reconstruct = True
+    reconstruct = False
 
-    motions = filenames[:j+1]
+    motions = filenames
     classes = []
     n_classes = len(classes)
     in_channels = 1
@@ -71,12 +63,15 @@ if __name__ == "__main__":
     
     kld_weight_train = 1/len(trainloader)
     print(f"Dataset batches: {len(trainloader)}")
-    print("kld_weight_train:", kld_weight_train)
     
     # define network
     encoder = LinearVAE(in_size=in_size, in_channels=in_channels, latent_dim=latent_dim, context_dim=n_classes, device=DEVICE)
+    state_dict = torch.load(encoder_filepath, weights_only=True)
+    encoder.load_state_dict(state_dict)
+    encoder.to(DEVICE)
     encoder.eval()
-    net = 
+    net = LatentMLPDynamics(latent_dim=latent_dim, hidden_dim=256, device=DEVICE)
+    net.to(DEVICE)
     optimizer = torch.optim.Adam(net.parameters(), lr=3e-4)
 
     print(net)
@@ -89,60 +84,50 @@ if __name__ == "__main__":
         for i, (x_batch, y_batch) in enumerate(trainloader):
             # DataLoader returns CPU tensors; move per-batch for correct device placement
             x_batch = x_batch.to(DEVICE)
+            y_batch = y_batch.to(DEVICE)
             
 
             # VAE expects NCHW: add channel dim
-            x_in = x_batch.unsqueeze(1)  # (B, 1, time=10, features=36)
+            x_in = x_batch.unsqueeze(1)  # (B, 1, time=15, features=36)
+            y_in = y_batch.unsqueeze(1)  # (B, 1, time=15, features=36)
 
             optimizer.zero_grad(set_to_none=True)
-            generated, src, mu, logvar = net(x_in)
-            
+            encoded_x = encoder.encode(x_in.flatten(1))
+            encoded_y = encoder.encode(y_in.flatten(1))
 
-            loss_dict = net.loss(src, generated, mu, logvar, kld_weight_train)
-            loss_dict["loss"].backward()
+            # mu, logvar = net.forward(encoded_x[0], encoded_x[1])
+            z_pred = net.forward(encoded_x[0])
+            # z_true = encoder.reparameterize(encoded_y[0], encoded_y[1])
+
+            # loss = net.loss(z, mu, logvar)
+            loss = net.loss(encoded_y[0], z_pred)
+            loss.backward()
             optimizer.step()
 
-            running_loss += loss_dict["loss"].detach()
-            running_recons += loss_dict["reconstruction"].detach()
-            running_kld += loss_dict["kld"].detach()
+            running_loss += loss.detach()
 
         print(
-            "[{epoch}, {batch}%] loss: {loss:.4f} reconstruction loss: {recons:.4f} kld loss: {kld:.4f}".format(
+            "[{epoch}, {batch}%] loss: {loss:.4f}".format(
                 epoch=epoch+1,
                 batch=100,
-                loss=loss_dict["loss"].item(),
-                recons=loss_dict["reconstruction"].item(),
-                kld=loss_dict["kld"].item(),
+                loss=loss.item(),
             )
         )   
         n_batches = i + 1 if 'i' in locals() else 1
         print(
-            "[{epoch}, train] loss: {loss:.4f} reconstruction loss: {recons:.4f} kld loss: {kld:.4f}".format(
+            "[{epoch}, train] loss: {loss:.4f}".format(
                 epoch=epoch+1,
                 loss=(running_loss / n_batches).item(),
-                recons=(running_recons / n_batches).item(),
-                kld=(running_kld / n_batches).item(),
             )
         )
-        error_graph.append((running_recons / n_batches).item())
+        error_graph.append((running_loss / n_batches).item())
 
 
-    filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/generated/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
-    error_filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/generated/latent_error_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
-    model_filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/generated/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.pth'
-    # net.generate_sequence(200, 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/generated_walk1_subject1_shortened_' + str(epochs) + '_epochs.csv', dataset)
-    if reconstruct:
-        samples_denorm = iterative_reconstruct(net, dataset.raw_data, dataset, normalize, device=DEVICE)
-    else:
-        rand_index = np.random.randint(0, len(dataset) - dataset.input_len - pred_length - 400)
-        samples_denorm = iterative_generate(net, dataset.raw_data[rand_index:rand_index + dataset.input_len], 400, dataset, out_len=pred_length, device=DEVICE)
-    df_generated = pd.DataFrame(samples_denorm)
-    # df_generated[df_generated.columns[0]] = 0
-    print(len(df_generated))
-    df_generated.to_csv(filepath, index=False)  
+    filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/latent/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
+    error_filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/latent/latent_error_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
+    model_filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/latent/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.pth'
     
     torch.save(net.state_dict(), model_filepath)
-    print(f"Generated sequence saved to {filepath}")
     error_graph = pd.DataFrame(error_graph, columns=['epoch_loss'])
     error_graph.to_csv(error_filepath, index=False)
     print(f"Error graph saved to {error_filepath}")

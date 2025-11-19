@@ -308,7 +308,7 @@ class LinearVAE(torch.nn.Module):
         return self.decoder(input)
     
     def loss(self, input: torch.Tensor, output: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor, kld_weight: float) -> dict:
-        reconstruction_loss = torch.nn.functional.mse_loss(input, output)
+        reconstruction_loss = torch.functional.mse_loss(input, output)
         kld_loss = torch.mean(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
         loss = reconstruction_loss + kld_weight * kld_loss
         return {"loss" : loss, "reconstruction" : reconstruction_loss.detach(), "kld" : kld_loss.detach()}
