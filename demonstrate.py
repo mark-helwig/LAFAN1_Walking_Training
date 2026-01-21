@@ -191,10 +191,10 @@ if __name__ == "__main__":
             out_filepath = 'LAFAN1_Retargeting_Dataset/g1/predict/demonstrate_' + current_time_str + '.csv'
             samples = predict(encoder, predictor, dataset.raw_data[:output_length], dataset, device=DEVICE)
         case 'random':
-            out_filepath = '../LAFAN1_Retargeting_Dataset/g1/random/random_' + current_time_str + '.csv'
+            out_filepath = 'LAFAN1_Retargeting_Dataset/g1/random/random_' + current_time_str + '.csv'
             samples = random(encoder, output_length, dataset, normalize, device=DEVICE)
         case 'reconstruct':
-            out_filepath = '../LAFAN1_Retargeting_Dataset/g1/reconstruct/demonstrate_' + current_time_str + '.csv'
+            out_filepath = 'LAFAN1_Retargeting_Dataset/g1/reconstruct/demonstrate_' + current_time_str + '.csv'
             samples = reconstruct(encoder, dataset.raw_data[:output_length], dataset, normalize, device=DEVICE)
         case _:
             print(f"Unknown test type: {test}")

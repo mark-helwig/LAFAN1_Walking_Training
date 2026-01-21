@@ -35,8 +35,7 @@ if __name__ == "__main__":
     folder_path = "LAFAN1_Retargeting_Dataset/g1/"
     filenames = get_walking_filenames_in_folder(folder_path)
     
-    encoder_filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/generated/model_12_files_1000_epochs.pth'
-
+    encoder_filepath = 'models/encoder/model_12_files_1000_epochs.pth'
 
     normalize = False
     reconstruct = False
@@ -70,7 +69,7 @@ if __name__ == "__main__":
     encoder.load_state_dict(state_dict)
     encoder.to(DEVICE)
     encoder.eval()
-    net = LatentMLPDynamics(latent_dim=latent_dim, hidden_dim=256, device=DEVICE)
+    net = ResidualLatentDynamics(latent_dim=latent_dim, hidden_dim=256, device=DEVICE)
     net.to(DEVICE)
     optimizer = torch.optim.Adam(net.parameters(), lr=3e-4)
 
@@ -95,12 +94,12 @@ if __name__ == "__main__":
             encoded_x = encoder.encode(x_in.flatten(1))
             encoded_y = encoder.encode(y_in.flatten(1))
 
-            # mu, logvar = net.forward(encoded_x[0], encoded_x[1])
-            z_pred = net.forward(encoded_x[0])
-            # z_true = encoder.reparameterize(encoded_y[0], encoded_y[1])
+            mu, logvar = net.forward(encoded_x[0], encoded_x[1])
+            # z_pred = net.forward(encoded_x[0])
+            z_true = encoder.reparameterize(encoded_y[0], encoded_y[1])
 
-            # loss = net.loss(z, mu, logvar)
-            loss = net.loss(encoded_y[0], z_pred)
+            loss = net.loss(z_true, mu, logvar)
+            # loss = net.loss(encoded_y[0], z_pred)
             loss.backward()
             optimizer.step()
 
@@ -123,9 +122,9 @@ if __name__ == "__main__":
         error_graph.append((running_loss / n_batches).item())
 
 
-    filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/latent/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
-    error_filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/latent/latent_error_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
-    model_filepath = 'C:/Users/Mark/OneDrive - The University of Texas at Austin/Documents/HCRL/LAFAN1_VAE_Experiment/LAFAN1_Retargeting_Dataset/g1/latent/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.pth'
+    filepath = 'models/predictor/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
+    error_filepath = 'models/predictor/latent_error_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
+    model_filepath = 'models/predictor/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.pth'
     
     torch.save(net.state_dict(), model_filepath)
     error_graph = pd.DataFrame(error_graph, columns=['epoch_loss'])
