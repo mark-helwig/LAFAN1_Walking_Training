@@ -30,6 +30,53 @@ def get_walking_filenames_in_folder(folder_path):
         print(f"An error occurred: {e}")
         return []
 
+def run_training_loop(net, trainloader, encoder, optimizer, epochs, DEVICE, error_graph):
+    for epoch in range(epochs):
+        encoder.to(DEVICE)
+        running_loss, running_recons, running_kld = 0, 0, 0
+        for i, (x_batch, y_batch) in enumerate(trainloader):
+            # DataLoader returns CPU tensors; move per-batch for correct device placement
+            x_batch = x_batch.to(DEVICE)
+            y_batch = y_batch.to(DEVICE)
+            
+            loss = net.train_step(x_batch, y_batch, encoder, optimizer)
+
+            # # VAE expects NCHW: add channel dim
+            # x_in = x_batch.unsqueeze(1)  # (B, 1, time=15, features=36)
+            # y_in = y_batch.unsqueeze(1)  # (B, 1, time=15, features=36)
+
+            # optimizer.zero_grad(set_to_none=True)
+            # encoded_x = encoder.encode(x_in.flatten(1))
+            # encoded_y = encoder.encode(y_in.flatten(1))
+
+            # mu, logvar = net.forward(encoded_x[0], encoded_x[1])
+            # # z_pred = net.forward(encoded_x[0])
+            # z_true = encoder.reparameterize(encoded_y[0], encoded_y[1])
+
+            # loss = net.loss(z_true, mu, logvar)
+            # # loss = net.loss(encoded_y[0], z_pred)
+            # loss.backward()
+            # optimizer.step()
+
+            running_loss += loss
+
+        print(
+            "[{epoch}, {batch}%] loss: {loss:.4f}".format(
+                epoch=epoch+1,
+                batch=100,
+                loss=loss.item(),
+            )
+        )   
+        n_batches = i + 1 if 'i' in locals() else 1
+        print(
+            "[{epoch}, train] loss: {loss:.4f}".format(
+                epoch=epoch+1,
+                loss=(running_loss / n_batches).item(),
+            )
+        )
+        error_graph.append((running_loss / n_batches).item())
+    print("Training complete.")
+
 if __name__ == "__main__":
 
     folder_path = "LAFAN1_Retargeting_Dataset/g1/"
@@ -77,49 +124,8 @@ if __name__ == "__main__":
     print()
 
 
-    for epoch in range(epochs):
-        encoder.to(DEVICE)
-        running_loss, running_recons, running_kld = 0, 0, 0
-        for i, (x_batch, y_batch) in enumerate(trainloader):
-            # DataLoader returns CPU tensors; move per-batch for correct device placement
-            x_batch = x_batch.to(DEVICE)
-            y_batch = y_batch.to(DEVICE)
-            
-
-            # VAE expects NCHW: add channel dim
-            x_in = x_batch.unsqueeze(1)  # (B, 1, time=15, features=36)
-            y_in = y_batch.unsqueeze(1)  # (B, 1, time=15, features=36)
-
-            optimizer.zero_grad(set_to_none=True)
-            encoded_x = encoder.encode(x_in.flatten(1))
-            encoded_y = encoder.encode(y_in.flatten(1))
-
-            mu, logvar = net.forward(encoded_x[0], encoded_x[1])
-            # z_pred = net.forward(encoded_x[0])
-            z_true = encoder.reparameterize(encoded_y[0], encoded_y[1])
-
-            loss = net.loss(z_true, mu, logvar)
-            # loss = net.loss(encoded_y[0], z_pred)
-            loss.backward()
-            optimizer.step()
-
-            running_loss += loss.detach()
-
-        print(
-            "[{epoch}, {batch}%] loss: {loss:.4f}".format(
-                epoch=epoch+1,
-                batch=100,
-                loss=loss.item(),
-            )
-        )   
-        n_batches = i + 1 if 'i' in locals() else 1
-        print(
-            "[{epoch}, train] loss: {loss:.4f}".format(
-                epoch=epoch+1,
-                loss=(running_loss / n_batches).item(),
-            )
-        )
-        error_graph.append((running_loss / n_batches).item())
+    # run training loop
+    run_training_loop(net, trainloader, encoder, optimizer, epochs, DEVICE, error_graph)
 
 
     filepath = 'models/predictor/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
