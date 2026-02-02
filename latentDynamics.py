@@ -1,14 +1,15 @@
 import torch
 import torch.nn as nn
 
-# Residual Latent Dynamics Model
-# This model predicts the subsequent latent state given the current latent state.
-# The latent dynamics of the VAE are hopefully smooth, so a residual connection is used.
-# μ_t+1​=μ_t​+A*μ_t, (log_σt+1)^2​=(log_σt)^2​+B*(log_σt)^2​
 
 class PredictionModel():
     def train_step(self, x_batch, y_batch, encoder, optimizer):
         raise NotImplementedError
+
+# Residual Latent Dynamics Model
+# This model predicts the subsequent latent state given the current latent state.
+# The latent dynamics of the VAE are hopefully smooth, so a residual connection is used.
+# μ_t+1​=μ_t​+A*μ_t, (log_σt+1)^2​=(log_σt)^2​+B*(log_σt)^2​
 
 class ResidualLatentDynamics(PredictionModel, nn.Module):
     def __init__(self, latent_dim=128, device="cpu", **kwargs):
