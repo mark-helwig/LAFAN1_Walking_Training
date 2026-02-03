@@ -226,12 +226,12 @@ if __name__ == "__main__":
 
     net.eval()
     example_input = torch.randn(x_batch.size()).to(DEVICE).unsqueeze(1)
-    traced_model = torch.jit.trace(net, example_input)
+    traced_model = torch.jit.trace(net, example_input, check_trace=False)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filepath = f'models/encoder/model_{epochs}_epochs_{timestamp}.csv'
     error_filepath = f'models/encoder/error_{epochs}_epochs_{timestamp}.csv'
-    model_filepath = f'models/encoder/model_{epochs}_epochs_{timestamp}.pt'
+    model_filepath = f'models/encoder/model_jit_{epochs}_epochs_{timestamp}.pt'
     model_fallback_filepath = f'models/encoder/model_fallback_{epochs}_epochs_{timestamp}.pt'
     
     # net.generate_sequence(200, 'models/encoder/generated_walk1_subject1_shortened_' + str(epochs) + '_epochs.csv', dataset)
