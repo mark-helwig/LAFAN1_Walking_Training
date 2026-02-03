@@ -5,6 +5,7 @@ import pandas as pd
 import sys
 import matplotlib.pyplot as plt
 import os
+from datetime import datetime
 
 DEVICE = "cuda" #if torch.cuda.is_available() # else "cpu" # mps is almost always slower
 # print(DEVICE)
@@ -82,7 +83,7 @@ if __name__ == "__main__":
     folder_path = "LAFAN1_Retargeting_Dataset/g1/"
     filenames = get_walking_filenames_in_folder(folder_path)
     
-    encoder_filepath = 'models/encoder/model_12_files_1000_epochs.pth'
+    encoder_filepath = 'models/encoder/model_fallback_1000_epochs_20260202_205355.pt'
 
     normalize = False
     reconstruct = False
@@ -92,7 +93,7 @@ if __name__ == "__main__":
     n_classes = len(classes)
     in_channels = 1
 
-    input_frames = 15
+    input_frames = 24
     pred_length = 1
     in_size = (input_frames, 36)
     latent_dim = 128
@@ -116,23 +117,30 @@ if __name__ == "__main__":
     encoder.load_state_dict(state_dict)
     encoder.to(DEVICE)
     encoder.eval()
-    net = ResidualLatentDynamics(latent_dim=latent_dim, hidden_dim=256, device=DEVICE)
+    net = LatentMLPDynamics(latent_dim=latent_dim, hidden_dim=256, device=DEVICE)
     net.to(DEVICE)
     optimizer = torch.optim.Adam(net.parameters(), lr=3e-4)
 
     print(net)
     print()
 
-
     # run training loop
     run_training_loop(net, trainloader, encoder, optimizer, epochs, DEVICE, error_graph)
 
+    net.eval()
+    example_input = torch.randn(batch_size, latent_dim, device=DEVICE)
+    traced_model = torch.jit.trace(net, example_input, check_trace=False)
 
-    filepath = 'models/predictor/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
-    error_filepath = 'models/predictor/latent_error_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.csv'
-    model_filepath = 'models/predictor/latent_model_' + str(len(motions)) + '_files_' + str(epochs) + '_epochs.pth'
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fallback_filepath = f'models/predictor/model_fallback_{epochs}_epochs_{timestamp}.pt'
+    error_filepath = f'models/predictor/latent_error_{epochs}_epochs_{timestamp}.csv'
+    model_filepath = f'models/predictor/model_{epochs}_epochs_{timestamp}.pt'
     
-    torch.save(net.state_dict(), model_filepath)
+    torch.save(net.state_dict(), fallback_filepath)
+    try:
+        torch.jit.save(traced_model, model_filepath)
+    except Exception as e:
+        print(f"Error saving traced model: {e}")
     error_graph = pd.DataFrame(error_graph, columns=['epoch_loss'])
     error_graph.to_csv(error_filepath, index=False)
     print(f"Error graph saved to {error_filepath}")
