@@ -94,7 +94,7 @@ if __name__ == "__main__":
     in_channels = 1
 
     input_frames = 24
-    pred_length = 1
+    pred_length = 8
     in_size = (input_frames, 36)
     latent_dim = 128
     epochs =  int(sys.argv[1]) if len(sys.argv) > 1 else 1000
@@ -132,9 +132,9 @@ if __name__ == "__main__":
     traced_model = torch.jit.trace(net, example_input, check_trace=False)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fallback_filepath = f'models/predictor/model_fallback_{epochs}_epochs_{timestamp}.pt'
-    error_filepath = f'models/predictor/latent_error_{epochs}_epochs_{timestamp}.csv'
-    model_filepath = f'models/predictor/model_{epochs}_epochs_{timestamp}.pt'
+    fallback_filepath = f'models/predictor/pred_length_{pred_length}_fallback_{epochs}_epochs_{timestamp}.pt'
+    error_filepath = f'models/predictor/pred_length_{pred_length}_error_{epochs}_epochs_{timestamp}.csv'
+    model_filepath = f'models/predictor/pred_length_{pred_length}{epochs}_epochs_{timestamp}.pt'
     
     torch.save(net.state_dict(), fallback_filepath)
     try:
