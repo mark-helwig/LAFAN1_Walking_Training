@@ -103,7 +103,7 @@ if __name__ == "__main__":
     error_graph = []
 
 
-    dataset = RobotMovementDataset(filenames=motions, input_len=input_frames, output_len=input_frames, device=DEVICE, normalize=normalize, reconstruct=reconstruct)
+    dataset = RobotMovementDataset(filenames=motions, input_len=input_frames, output_len=pred_length, device=DEVICE, normalize=normalize, reconstruct=reconstruct)
     # make dataset
     trainloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
                                             shuffle=True, num_workers=2, pin_memory=True, drop_last=True)   
