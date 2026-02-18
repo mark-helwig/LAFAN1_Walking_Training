@@ -10,9 +10,9 @@ if DEVICE == "cuda": torch.backends.cudnn.benchmark = True # enables cuDNN auto-
 torch.manual_seed(0)
 
 # from LAFAN1_VAE_Experiment import ROOT_DIR
-from vae import PhaseVAE
+from models.vae import PhaseVAE
 import utils
-from RobotMovementDataset import RobotMovementDataset
+from datasets.RobotMovementDataset import RobotMovementDataset
 
 def generate_sequence_with_phase(model, dataset, seed_seq,
                                  num_cycles=4, steps_per_cycle=45,
