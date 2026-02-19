@@ -1,18 +1,17 @@
 import os
 import sys
 import argparse
+import time
 from datetime import datetime
 import pandas as pd
 import numpy as np
 import torch
 
-from models.transformer import TransformerPredictor, TransformerPredictorAutoregressive
-
 if __name__ == "__main__":
-
-    
-    # Set up paths
+    # Set up paths first
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    from models.transformer import TransformerPredictor, TransformerPredictorAutoregressive
     from datasets.RobotMovementDataset import RobotMovementDataset
     
     # Set device
@@ -39,6 +38,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning-rate", type=float, default=3e-4, help="Learning rate (default: 3e-4)")
     parser.add_argument("--model-type", type=str, default="encoder-decoder", choices=["encoder-decoder", "autoregressive"], help="Model type: 'encoder-decoder' or 'autoregressive' (default: encoder-decoder)")
     parser.add_argument("--normalize", action="store_true", help="Normalize dataset (default: False)")
+    parser.add_argument("--no-teacher-forcing", action="store_true", help="Disable teacher forcing for autoregressive model (default: enabled)")
     parser.add_argument("--device", type=str, default=DEVICE, choices=["cuda", "cpu"], help=f"Device to use (default: {DEVICE})")
     parser.add_argument("--data-folder", type=str, default="LAFAN1_Retargeting_Dataset/g1/", help="Path to data folder (default: LAFAN1_Retargeting_Dataset/g1/)")
     
@@ -115,9 +115,11 @@ if __name__ == "__main__":
             nhead=args.nhead,
             dim_feedforward=args.dim_feedforward,
             dropout=args.dropout,
+            use_teacher_forcing=not args.no_teacher_forcing,
             device=DEVICE,
         )
-        print("Using TransformerPredictorAutoregressive")
+        teacher_forcing_status = "disabled" if args.no_teacher_forcing else "enabled"
+        print(f"Using TransformerPredictorAutoregressive (teacher forcing: {teacher_forcing_status})")
     
     model.to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -126,6 +128,15 @@ if __name__ == "__main__":
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
     print()
     
+    # Create run-specific folder before training
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = (
+        f"generated_models/transformer/{timestamp}_"
+        f"{args.model_type}_h{args.history_len}_p{args.pred_len}_d{args.latent_dim}"
+    )
+    os.makedirs(run_dir, exist_ok=True)
+    print(f"Saving checkpoints to {run_dir}\n")
+    
     # Training loop
     error_graph = []
     print("Starting training...")
@@ -133,42 +144,48 @@ if __name__ == "__main__":
     for epoch in range(args.epochs):
         model.train()
         running_loss = 0.0
+        batch_start_time = time.time()
         
         for i, (x_batch, y_batch) in enumerate(trainloader):
             # Move batches to device
             x_batch = x_batch.to(DEVICE)
             y_batch = y_batch.to(DEVICE)
             
+            # For transformer, only use the first pred_len frames from the target
+            # (dataset returns overlapping windows needed for VAE/MLP)
+            y_batch = y_batch[:, :args.pred_len, :]
+            
             # Training step
             loss = model.train_step(x_batch, y_batch, optimizer)
-            running_loss += loss
+            running_loss += loss.item()
         
         n_batches = i + 1 if 'i' in locals() else 1
-        avg_loss = (running_loss / n_batches).item()
+        avg_loss = running_loss / n_batches
         error_graph.append(avg_loss)
         
-        if (epoch + 1) % max(1, args.epochs // 10) == 0 or epoch == 0:
-            print(f"[Epoch {epoch + 1}/{args.epochs}] loss: {avg_loss:.6f}")
+        epoch_time = time.time() - batch_start_time
+        gpu_mem = ""
+        if DEVICE == "cuda":
+            gpu_mem = f" | GPU mem: {torch.cuda.memory_allocated()/1e9:.2f}GB"
+        print(f"[Epoch {epoch + 1}/{args.epochs}] loss: {avg_loss:.6f} | time: {epoch_time:.1f}s{gpu_mem}")
+        
+        # Save checkpoint every 50 epochs
+        if (epoch + 1) % 50 == 0:
+            checkpoint_filename = f"{run_dir}/checkpoint_epoch_{epoch + 1}.pt"
+            torch.save(model.state_dict(), checkpoint_filename)
+            print(f"  Checkpoint saved: {checkpoint_filename}")
+        
+        # Clear GPU cache to prevent memory buildup
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
     
     print("Training complete.")
     
     # Save model and metrics
     model.eval()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    model_dir = f"generated_models/transformer"
-    os.makedirs(model_dir, exist_ok=True)
-    
-    model_filename = (
-        f"{model_dir}/transformer_{args.model_type}_"
-        f"h{args.history_len}_p{args.pred_len}_d{args.latent_dim}_"
-        f"e{args.epochs}_{timestamp}.pt"
-    )
-    error_filename = (
-        f"{model_dir}/transformer_{args.model_type}_"
-        f"h{args.history_len}_p{args.pred_len}_d{args.latent_dim}_"
-        f"e{args.epochs}_{timestamp}_error.csv"
-    )
+    model_filename = f"{run_dir}/model.pt"
+    error_filename = f"{run_dir}/error.csv"
     
     # Save state dict
     torch.save(model.state_dict(), model_filename)

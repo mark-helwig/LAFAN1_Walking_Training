@@ -261,6 +261,7 @@ class TransformerPredictorAutoregressive(nn.Module):
         dim_feedforward: int = 256,
         dropout: float = 0.1,
         activation: str = "relu",
+        use_teacher_forcing: bool = True,
         device: str = "cpu",
         **kwargs
     ):
@@ -270,6 +271,7 @@ class TransformerPredictorAutoregressive(nn.Module):
         self.pred_len = pred_len
         self.joint_dim = joint_dim
         self.latent_dim = latent_dim
+        self.use_teacher_forcing = use_teacher_forcing
         self.device = device
         
         # Input projection: 36 -> latent_dim (1-layer MLP)
@@ -350,12 +352,8 @@ class TransformerPredictorAutoregressive(nn.Module):
         current_input = latent_history
         
         for step in range(self.pred_len):
-            # Create causal mask
-            seq_len = current_input.size(1)
-            causal_mask = self._create_causal_mask(seq_len)
-            
-            # Process through encoder
-            hidden = self.transformer_encoder(current_input, src_key_padding_mask=causal_mask)
+            # Process through encoder (no causal mask needed - we're only using past frames)
+            hidden = self.transformer_encoder(current_input)
             
             # Get last frame's latent representation and project to joint space
             last_latent = hidden[:, -1, :]
@@ -373,6 +371,44 @@ class TransformerPredictorAutoregressive(nn.Module):
         
         # Stack predictions: list of (batch, 36) -> (batch, pred_len, 36)
         predictions = torch.stack(predictions, dim=1)
+        
+        return predictions
+    
+    def forward_teacher_forcing(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass with teacher forcing (for faster training).
+        Feeds ground truth targets instead of model predictions.
+        
+        Args:
+            x: (batch, history_len, 36) - history frames in joint space
+            y: (batch, pred_len, 36) - ground truth future frames
+        
+        Returns:
+            (batch, pred_len, 36) - model predictions using teacher forcing
+        """
+        batch_size = x.size(0)
+        
+        # Project input to latent space
+        latent_history = self.input_projection(x)
+        
+        # Add positional encoding
+        latent_history = latent_history + self.pos_encoding[:, :self.history_len, :]
+        
+        # Process all history + targets together
+        latent_targets = self.input_projection(y)
+        for step in range(self.pred_len):
+            pos_idx = self.history_len + step
+            if pos_idx < self.pos_encoding.size(1):
+                latent_targets[:, step, :] = latent_targets[:, step, :] + self.pos_encoding[:, pos_idx, :]
+        
+        # Concatenate history with targets
+        full_sequence = torch.cat([latent_history, latent_targets], dim=1)
+        
+        # Single forward pass through encoder
+        encoded = self.transformer_encoder(full_sequence)
+        
+        # Extract predictions from the target portion and project to joint space
+        predictions = self.output_projection(encoded[:, self.history_len:, :])
         
         return predictions
     
@@ -416,7 +452,12 @@ class TransformerPredictorAutoregressive(nn.Module):
         """
         optimizer.zero_grad(set_to_none=True)
         
-        predictions = self.forward(x_batch)
+        # Use teacher forcing or true autoregressive based on flag
+        if self.use_teacher_forcing:
+            predictions = self.forward_teacher_forcing(x_batch, y_batch)
+        else:
+            predictions = self.forward(x_batch)
+        
         loss_dict = self.loss(predictions, y_batch)
         
         loss_dict["loss"].backward()
