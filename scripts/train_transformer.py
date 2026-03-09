@@ -25,7 +25,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Transformer model for robot motion prediction")
         
     # Optional arguments
-    parser.add_argument("--epochs", type=int, default=1000, help="Number of training epochs")
+    parser.add_argument("--epochs", type=int, default=500, help="Number of training epochs")
     parser.add_argument("--history-len", type=int, default=24, help="Number of history frames (default: 24)")
     parser.add_argument("--pred-len", type=int, default=8, help="Number of frames to predict (default: 8)")
     parser.add_argument("--latent-dim", type=int, default=128, help="Dimension of latent space (default: 128)")
@@ -36,11 +36,12 @@ if __name__ == "__main__":
     parser.add_argument("--dim-feedforward", type=int, default=256, help="Dimension of feedforward network (default: 256)")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (default: 0.1)")
     parser.add_argument("--learning-rate", type=float, default=3e-4, help="Learning rate (default: 3e-4)")
-    parser.add_argument("--model-type", type=str, default="encoder-decoder", choices=["encoder-decoder", "autoregressive"], help="Model type: 'encoder-decoder' or 'autoregressive' (default: encoder-decoder)")
+    parser.add_argument("--model-type", type=str, default="autoregressive", choices=["encoder-decoder", "autoregressive"], help="Model type: 'encoder-decoder' or 'autoregressive' (default: encoder-decoder)")
     parser.add_argument("--normalize", action="store_true", help="Normalize dataset (default: False)")
-    parser.add_argument("--no-teacher-forcing", action="store_true", help="Disable teacher forcing for autoregressive model (default: enabled)")
+    parser.add_argument("--teacher-forcing", action="store_true", help="Enable teacher forcing for autoregressive model (default: disabled)")
     parser.add_argument("--device", type=str, default=DEVICE, choices=["cuda", "cpu"], help=f"Device to use (default: {DEVICE})")
     parser.add_argument("--data-folder", type=str, default="LAFAN1_Retargeting_Dataset/g1/", help="Path to data folder (default: LAFAN1_Retargeting_Dataset/g1/)")
+    parser.add_argument("--subject", type=int, default=None, help="Subject to use from dataset (default: all subjects)")
     
     args = parser.parse_args()
     
@@ -48,10 +49,12 @@ if __name__ == "__main__":
     DEVICE = args.device
     
     # Get filenames
-    def get_walking_filenames_in_folder(folder_path):
+    def get_walking_filenames_in_folder(folder_path, subject):
         try:
             filenames = os.listdir(folder_path)
             filenames = [f for f in filenames if f.startswith("walk") and os.path.isfile(os.path.join(folder_path, f))]
+            if subject is not None:
+                filenames = [f for f in filenames if f.contains(f"subject{subject}")]
             return filenames
         except FileNotFoundError:
             print(f"Error: Folder not found at '{folder_path}'")
@@ -60,7 +63,7 @@ if __name__ == "__main__":
             print(f"An error occurred: {e}")
             return []
     
-    filenames = get_walking_filenames_in_folder(args.data_folder)
+    filenames = get_walking_filenames_in_folder(args.data_folder, args.subject)
     if not filenames:
         print(f"No walking files found in {args.data_folder}")
         sys.exit(1)
@@ -115,10 +118,10 @@ if __name__ == "__main__":
             nhead=args.nhead,
             dim_feedforward=args.dim_feedforward,
             dropout=args.dropout,
-            use_teacher_forcing=not args.no_teacher_forcing,
+            use_teacher_forcing= args.teacher_forcing,
             device=DEVICE,
         )
-        teacher_forcing_status = "disabled" if args.no_teacher_forcing else "enabled"
+        teacher_forcing_status = "enabled" if args.teacher_forcing else "disabled"
         print(f"Using TransformerPredictorAutoregressive (teacher forcing: {teacher_forcing_status})")
     
     model.to(DEVICE)

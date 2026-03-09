@@ -61,7 +61,7 @@ class RobotMovementDataset(Dataset):
         if self.reconstruct:
             y = x
         else:
-            y = self.raw_data[adjusted_index + self.output_len : adjusted_index + self.input_len + self.output_len]
+            y = self.raw_data[adjusted_index + self.input_len : adjusted_index + self.input_len + self.output_len]
         phase = self.phase_per_frame[adjusted_index + self.input_len - 1]
         
         # Convert to PyTorch tensors

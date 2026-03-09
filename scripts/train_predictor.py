@@ -2,12 +2,12 @@ import torch
 import torchvision
 import numpy as np
 import pandas as pd
-import sys
+import argparse
 import matplotlib.pyplot as plt
 import os
 from datetime import datetime
 
-DEVICE = "cuda" #if torch.cuda.is_available() # else "cpu" # mps is almost always slower
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # print(DEVICE)
 if DEVICE == "cuda": torch.backends.cudnn.benchmark = True # enables cuDNN auto-tuner
 torch.manual_seed(0)
@@ -31,7 +31,7 @@ def get_walking_filenames_in_folder(folder_path):
         print(f"An error occurred: {e}")
         return []
 
-def run_training_loop(net, trainloader, encoder, optimizer, epochs, DEVICE, error_graph):
+def run_training_loop(net, trainloader, encoder, optimizer, epochs, DEVICE, error_graph, run_dir):
     for epoch in range(epochs):
         encoder.to(DEVICE)
         running_loss, running_recons, running_kld = 0, 0, 0
@@ -76,16 +76,39 @@ def run_training_loop(net, trainloader, encoder, optimizer, epochs, DEVICE, erro
             )
         )
         error_graph.append((running_loss / n_batches).item())
+
+        # Save checkpoint every 50 epochs
+        if (epoch + 1) % 50 == 0:
+            checkpoint_filename = f"{run_dir}/checkpoint_epoch_{epoch + 1}.pt"
+            torch.save(net.state_dict(), checkpoint_filename)
+            print(f"  Checkpoint saved: {checkpoint_filename}")
     print("Training complete.")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train latent-space predictor (MLP) model")
+    parser.add_argument("--epochs", type=int, default=1000, help="Number of training epochs")
+    parser.add_argument("--history-len", type=int, default=24, help="Number of history frames")
+    parser.add_argument("--pred-len", type=int, default=8, help="Number of prediction frames")
+    parser.add_argument("--latent-dim", type=int, default=128, help="Dimension of latent space")
+    parser.add_argument("--batch-size", type=int, default=15, help="Batch size for training")
+    parser.add_argument("--learning-rate", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--normalize", action="store_true", help="Normalize dataset")
+    parser.add_argument("--device", type=str, default=DEVICE, choices=["cuda", "cpu"], help=f"Device to use (default: {DEVICE})")
+    parser.add_argument("--data-folder", type=str, default="LAFAN1_Retargeting_Dataset/g1/", help="Path to data folder")
+    parser.add_argument("--encoder-path", type=str, default="generated_models/encoder/model_fallback_1000_epochs_20260202_205355.pt", help="Path to trained encoder weights")
+    parser.add_argument("--hidden-dim", type=int, default=256, help="Hidden dimension for predictor MLP")
+    args = parser.parse_args()
 
-    folder_path = "LAFAN1_Retargeting_Dataset/g1/"
-    filenames = get_walking_filenames_in_folder(folder_path)
+    DEVICE = args.device
+
+    filenames = get_walking_filenames_in_folder(args.data_folder)
+    if not filenames:
+        print(f"No walking files found in {args.data_folder}")
+        raise SystemExit(1)
     
-    encoder_filepath = 'generated_models/encoder/model_fallback_1000_epochs_20260202_205355.pt'
+    encoder_filepath = args.encoder_path
 
-    normalize = False
+    normalize = args.normalize
     reconstruct = False
 
     motions = filenames
@@ -93,14 +116,20 @@ if __name__ == "__main__":
     n_classes = len(classes)
     in_channels = 1
 
-    input_frames = 24
-    pred_length = 8
+    input_frames = args.history_len
+    pred_length = args.pred_len
     in_size = (input_frames, 36)
-    latent_dim = 128
-    epochs =  int(sys.argv[1]) if len(sys.argv) > 1 else 1000
-    batch_size = 15
+    latent_dim = args.latent_dim
+    epochs = args.epochs
+    batch_size = args.batch_size
 
     error_graph = []
+
+    # Create run-specific folder before training
+    run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = f"generated_models/predictor/{run_timestamp}_mlp_h{input_frames}_p{pred_length}_d{latent_dim}"
+    os.makedirs(run_dir, exist_ok=True)
+    print(f"Saving checkpoints to {run_dir}\n")
 
 
     dataset = RobotMovementDataset(filenames=motions, input_len=input_frames, output_len=pred_length, device=DEVICE, normalize=normalize, reconstruct=reconstruct)
@@ -117,24 +146,23 @@ if __name__ == "__main__":
     encoder.load_state_dict(state_dict)
     encoder.to(DEVICE)
     encoder.eval()
-    net = LatentMLP(latent_dim=latent_dim, hidden_dim=256, device=DEVICE)
+    net = LatentMLP(latent_dim=latent_dim, hidden_dim=args.hidden_dim, device=DEVICE)
     net.to(DEVICE)
-    optimizer = torch.optim.Adam(net.parameters(), lr=3e-4)
+    optimizer = torch.optim.Adam(net.parameters(), lr=args.learning_rate)
 
     print(net)
     print()
 
     # run training loop
-    run_training_loop(net, trainloader, encoder, optimizer, epochs, DEVICE, error_graph)
+    run_training_loop(net, trainloader, encoder, optimizer, epochs, DEVICE, error_graph, run_dir)
 
     net.eval()
     example_input = torch.randn(batch_size, latent_dim, device=DEVICE)
     traced_model = torch.jit.trace(net, example_input, check_trace=False)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fallback_filepath = f'generated_models/predictor/pred_length_{pred_length}_fallback_{epochs}_epochs_{timestamp}.pt'
-    error_filepath = f'generated_models/predictor/pred_length_{pred_length}_error_{epochs}_epochs_{timestamp}.csv'
-    model_filepath = f'generated_models/predictor/pred_length_{pred_length}{epochs}_epochs_{timestamp}.pt'
+    fallback_filepath = f"{run_dir}/model.pt"
+    error_filepath = f"{run_dir}/error.csv"
+    model_filepath = f"{run_dir}/model_jit.pt"
     
     torch.save(net.state_dict(), fallback_filepath)
     try:

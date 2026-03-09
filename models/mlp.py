@@ -30,9 +30,22 @@ class LatentMLP(PredictionModel, nn.Module):
         return nn.MSELoss()(z_pred, z_true)
     
     def train_step(self, x_batch, y_batch, encoder, optimizer):
-        # VAE expects NCHW: add channel dim
-        x_in = x_batch.unsqueeze(1)  # (B, 1, time=15, features=36)
-        y_in = y_batch.unsqueeze(1)  # (B, 1, time=15, features=36)
+        # Build a target window with the same temporal length as x_batch.
+        # For non-overlap datasets, y_batch is pure future of length K.
+        # We construct the shifted window: [x[:, K:], y[:, :K]].
+        hist_len = x_batch.size(1)
+        pred_len = y_batch.size(1)
+
+        if pred_len > hist_len:
+            raise ValueError(
+                f"Prediction length ({pred_len}) cannot exceed history length ({hist_len}) for latent MLP training."
+            )
+
+        y_shifted = torch.cat((x_batch[:, pred_len:, :], y_batch[:, :pred_len, :]), dim=1)
+
+        # VAE expects NCHW
+        x_in = x_batch.unsqueeze(1)
+        y_in = y_shifted.unsqueeze(1)
 
         optimizer.zero_grad(set_to_none=True)
         encoded_x = encoder.encode(x_in.flatten(1))

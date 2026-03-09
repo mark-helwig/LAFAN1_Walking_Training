@@ -2,7 +2,7 @@ import torch
 import argparse
 import os
 from models.vae import LinearVAE
-from models.mlp import LatentMLPDynamics, ResidualLatentDynamics
+from models.mlp import LatentMLP
 
 
 class EncoderPredictorCombined(torch.nn.Module):
@@ -76,12 +76,7 @@ def combine_encoder_predictor(encoder_pt_path, predictor_pt_path, output_path=No
     
     # Load predictor
     print(f"Loading predictor from {predictor_pt_path}...")
-    if predictor_type.lower() == "mlp":
-        predictor = LatentMLPDynamics(latent_dim=latent_dim, hidden_dim=hidden_dim, device=DEVICE)
-    elif predictor_type.lower() == "residual":
-        predictor = ResidualLatentDynamics(latent_dim=latent_dim, device=DEVICE)
-    else:
-        raise ValueError(f"Unknown predictor type: {predictor_type}")
+    predictor = LatentMLP(latent_dim=latent_dim, hidden_dim=hidden_dim, device=DEVICE)
     
     predictor_state = torch.load(predictor_pt_path, map_location=DEVICE, weights_only=True)
     predictor.load_state_dict(predictor_state)
