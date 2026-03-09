@@ -13,7 +13,6 @@ class RobotMovementDataset(Dataset):
         df, self.lengths = self.get_data(filenames)
         self.phase = phase
         self.raw_data = df.astype(np.float32).values  # convert to numpy for slicing
-        self.torch_df = torch.tensor(self.raw_data, dtype=torch.float32, device=device)
         self.input_len = input_len
         self.output_len = output_len
         if reconstruct:
@@ -29,6 +28,9 @@ class RobotMovementDataset(Dataset):
         else:
             self.mean, self.std = np.zeros((1, self.raw_data.shape[1])), np.ones((1, self.raw_data.shape[1]))
 
+        # Build a contiguous tensor once; __getitem__ returns views from this tensor.
+        self.data_tensor = torch.from_numpy(self.raw_data.astype(np.float32, copy=False))
+
         self.samples = len(df) - input_len - output_len + 1
         if self.samples <= 0:
             raise ValueError("Not enough rows in DataFrame for given input/output lengths.")
@@ -36,6 +38,7 @@ class RobotMovementDataset(Dataset):
         self.phase_per_frame = np.array([
             2 * np.pi * (i % gait_period) / gait_period for i in range(len(self.raw_data))
         ], dtype=np.float32)
+        self.phase_tensor = torch.from_numpy(self.phase_per_frame)
 
     def get_data(self, filenames):
         data = pd.DataFrame()
@@ -57,22 +60,16 @@ class RobotMovementDataset(Dataset):
                 if idx + self.input_len + self.output_len > self.lengths[i]:
                     adjusted_index = self.lengths[i] - self.input_len - self.output_len
 
-        x = self.raw_data[adjusted_index : adjusted_index + self.input_len]
+        x = self.data_tensor[adjusted_index : adjusted_index + self.input_len]
         if self.reconstruct:
             y = x
         else:
-            y = self.raw_data[adjusted_index + self.input_len : adjusted_index + self.input_len + self.output_len]
-        phase = self.phase_per_frame[adjusted_index + self.input_len - 1]
-        
-        # Convert to PyTorch tensors
-        # Return CPU tensors; training loop will handle device placement
-        x_tensor = torch.tensor(x, dtype=torch.float32)
-        y_tensor = torch.tensor(y, dtype=torch.float32)
-        phase_tensor = torch.tensor(phase, dtype=torch.float32)
+            y = self.data_tensor[adjusted_index + self.input_len : adjusted_index + self.input_len + self.output_len]
+        phase = self.phase_tensor[adjusted_index + self.input_len - 1]
 
         if self.phase:
-            return x_tensor, y_tensor, phase_tensor
-        return x_tensor, y_tensor
+            return x, y, phase
+        return x, y
 
     def denormalize(self, data):
         """Convert normalized data back to original scale."""

@@ -2,9 +2,9 @@ import os
 import sys
 import argparse
 import time
+from contextlib import nullcontext
 from datetime import datetime
 import pandas as pd
-import numpy as np
 import torch
 
 if __name__ == "__main__":
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     parser.add_argument("--history-len", type=int, default=24, help="Number of history frames (default: 24)")
     parser.add_argument("--pred-len", type=int, default=8, help="Number of frames to predict (default: 8)")
     parser.add_argument("--latent-dim", type=int, default=128, help="Dimension of latent space (default: 128)")
-    parser.add_argument("--batch-size", type=int, default=15, help="Batch size for training (default: 15)")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size for training (default: 64)")
     parser.add_argument("--num-encoder-layers", type=int, default=1, help="Number of transformer encoder layers (default: 2)")
     parser.add_argument("--num-decoder-layers", type=int, default=1, help="Number of transformer decoder layers (default: 2)")
     parser.add_argument("--nhead", type=int, default=4, help="Number of attention heads (default: 4)")
@@ -42,11 +42,23 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default=DEVICE, choices=["cuda", "cpu"], help=f"Device to use (default: {DEVICE})")
     parser.add_argument("--data-folder", type=str, default="LAFAN1_Retargeting_Dataset/g1/", help="Path to data folder (default: LAFAN1_Retargeting_Dataset/g1/)")
     parser.add_argument("--subject", type=int, default=None, help="Subject to use from dataset (default: all subjects)")
+    parser.add_argument("--num-workers", type=int, default=16, help="DataLoader worker processes (default: 16)")
+    parser.add_argument("--prefetch-factor", type=int, default=4, help="DataLoader prefetch factor per worker (default: 4)")
+    parser.add_argument("--persistent-workers", action=argparse.BooleanOptionalAction, default=True, help="Keep DataLoader workers alive across epochs (default: enabled)")
+    parser.add_argument("--grad-accum-steps", type=int, default=1, help="Gradient accumulation steps (default: 1)")
+    parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True, help="Enable automatic mixed precision on CUDA (default: enabled)")
+    parser.add_argument("--amp-dtype", type=str, default="bfloat16", choices=["float16", "bfloat16"], help="AMP dtype to use on CUDA (default: bfloat16)")
     
     args = parser.parse_args()
     
     # Override DEVICE if specified
     DEVICE = args.device
+    amp_enabled = args.amp and DEVICE == "cuda"
+    amp_dtype = torch.bfloat16 if args.amp_dtype == "bfloat16" else torch.float16
+
+    if args.grad_accum_steps < 1:
+        print("Error: --grad-accum-steps must be >= 1")
+        sys.exit(1)
     
     # Get filenames
     def get_walking_filenames_in_folder(folder_path, subject):
@@ -54,7 +66,7 @@ if __name__ == "__main__":
             filenames = os.listdir(folder_path)
             filenames = [f for f in filenames if f.startswith("walk") and os.path.isfile(os.path.join(folder_path, f))]
             if subject is not None:
-                filenames = [f for f in filenames if f.contains(f"subject{subject}")]
+                filenames = [f for f in filenames if f"subject{subject}" in f]
             return filenames
         except FileNotFoundError:
             print(f"Error: Folder not found at '{folder_path}'")
@@ -81,17 +93,25 @@ if __name__ == "__main__":
     )
     
     # Create dataloader
-    trainloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=2,
-        pin_memory=(DEVICE == "cuda"),
-        drop_last=True,
-    )
+    dataloader_kwargs = {
+        "dataset": dataset,
+        "batch_size": args.batch_size,
+        "shuffle": True,
+        "num_workers": args.num_workers,
+        "pin_memory": (DEVICE == "cuda"),
+        "drop_last": True,
+    }
+    if args.num_workers > 0:
+        dataloader_kwargs["prefetch_factor"] = args.prefetch_factor
+        dataloader_kwargs["persistent_workers"] = args.persistent_workers
+    trainloader = torch.utils.data.DataLoader(**dataloader_kwargs)
     
     print(f"Dataset batches: {len(trainloader)}")
     print(f"Training with {len(filenames)} files, {len(dataset)} samples")
+    print(
+        f"Loader config: workers={args.num_workers}, prefetch={args.prefetch_factor if args.num_workers > 0 else 'n/a'}, "
+        f"persistent={args.persistent_workers if args.num_workers > 0 else 'n/a'}"
+    )
     
     # Create model
     if args.model_type == "encoder-decoder":
@@ -126,9 +146,12 @@ if __name__ == "__main__":
     
     model.to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled and amp_dtype == torch.float16)
     
     print(model)
     print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"AMP enabled: {amp_enabled} (dtype={args.amp_dtype if amp_enabled else 'n/a'})")
+    print(f"Gradient accumulation steps: {args.grad_accum_steps}")
     print()
     
     # Create run-specific folder before training
@@ -148,19 +171,42 @@ if __name__ == "__main__":
         model.train()
         running_loss = 0.0
         batch_start_time = time.time()
+        optimizer.zero_grad(set_to_none=True)
         
         for i, (x_batch, y_batch) in enumerate(trainloader):
             # Move batches to device
-            x_batch = x_batch.to(DEVICE)
-            y_batch = y_batch.to(DEVICE)
+            x_batch = x_batch.to(DEVICE, non_blocking=True)
+            y_batch = y_batch.to(DEVICE, non_blocking=True)
             
             # For transformer, only use the first pred_len frames from the target
             # (dataset returns overlapping windows needed for VAE/MLP)
             y_batch = y_batch[:, :args.pred_len, :]
             
-            # Training step
-            loss = model.train_step(x_batch, y_batch, optimizer)
-            running_loss += loss.item()
+            amp_context = torch.autocast(device_type="cuda", dtype=amp_dtype) if amp_enabled else nullcontext()
+            with amp_context:
+                if args.model_type == "autoregressive" and args.teacher_forcing:
+                    predictions = model.forward_teacher_forcing(x_batch, y_batch)
+                else:
+                    predictions = model(x_batch)
+
+                loss_dict = model.loss(predictions, y_batch)
+                loss = loss_dict["loss"]
+
+            loss_for_backward = loss / args.grad_accum_steps
+            if scaler.is_enabled():
+                scaler.scale(loss_for_backward).backward()
+            else:
+                loss_for_backward.backward()
+
+            if (i + 1) % args.grad_accum_steps == 0 or (i + 1) == len(trainloader):
+                if scaler.is_enabled():
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+
+            running_loss += loss.detach().item()
         
         n_batches = i + 1 if 'i' in locals() else 1
         avg_loss = running_loss / n_batches
