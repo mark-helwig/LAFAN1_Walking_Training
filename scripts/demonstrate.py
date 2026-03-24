@@ -7,7 +7,10 @@ import os
 import argparse
 from datetime import datetime
 
-DEVICE = "cuda" #if torch.cuda.is_available() # else "cpu" # mps is almost always slower
+# Allow running as `python scripts/demonstrate.py` from outside project root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # print(DEVICE)
 if DEVICE == "cuda": torch.backends.cudnn.benchmark = True # enables cuDNN auto-tuner
 torch.manual_seed(0)
@@ -15,6 +18,7 @@ torch.manual_seed(0)
 # from LAFAN1_VAE_Experiment import ROOT_DIR
 from models.vae import LinearVAE
 from models.mlp import LatentMLP
+from models.transformer import TransformerPredictorAutoregressive
 import utils
 from datasets.RobotMovementDataset import RobotMovementDataset
 
@@ -127,6 +131,39 @@ def random(model, input_length, dataset, normalize, device="cpu", debug: bool = 
     return motion.reshape(-1, motion.shape[-1])
 
 
+def predict_transformer_autoregressive(model, input_sequence, history_len, device="cpu"):
+    """
+    Run sliding-window inference with TransformerPredictorAutoregressive.
+
+    Args:
+        model: trained TransformerPredictorAutoregressive
+        input_sequence: numpy array (time, num_joints)
+        history_len: number of history frames expected by model
+    """
+    model.eval()
+    model.to(device)
+
+    if len(input_sequence) <= history_len:
+        raise ValueError(
+            f"input_sequence length ({len(input_sequence)}) must be greater than history_len ({history_len})."
+        )
+
+    generated = []
+
+    for i in range(len(input_sequence) - history_len):
+        current_seq = input_sequence[i : i + history_len]
+        x = torch.tensor(current_seq, dtype=torch.float32, device=device).unsqueeze(0)
+
+        with torch.no_grad():
+            # Model output: (1, pred_len, joint_dim). Use first step for rolling one-step output.
+            pred = model(x)
+            next_frame = pred[0, 0, :].detach().cpu().numpy().reshape(1, -1)
+        generated.append(next_frame)
+
+    motion = np.concatenate(generated, axis=0)
+    return motion.reshape(-1, motion.shape[-1])
+
+
 def get_walking_filenames_in_folder(folder_path):
     """
     Retrieves a list of filenames within a specified folder.
@@ -152,36 +189,91 @@ def get_walking_filenames_in_folder(folder_path):
     
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="Demonstrate VAE motion generation or reconstruction.")
-    parser.add_argument('--test', choices=['predict', 'random', 'reconstruct'], required=True, help="Type of test to perform: 'predict' for latent space prediction, 'random' for random sampling, 'reconstruct' for reconstruction from input.")
-    parser.add_argument('--encoder', required=True, help="Path to the trained encoder model file.")
-    parser.add_argument('--predictor', required=False, help="Path to the trained predictor model file. Needed only for 'predict' test.")
+    parser = argparse.ArgumentParser(description="Demonstrate VAE motion generation/reconstruction or transformer inference.")
+    parser.add_argument(
+        '--test',
+        choices=['predict', 'random', 'reconstruct', 'transformer_autoregressive'],
+        required=True,
+        help="Type of test to perform."
+    )
+    parser.add_argument('--encoder', required=False, help="Encoder model name under models/encoder (without .pth). Required for VAE modes.")
+    parser.add_argument('--predictor', required=False, help="Predictor model name under models/predictor (without .pth). Required only for 'predict'.")
+    parser.add_argument('--transformer', required=False, help="Transformer checkpoint path under generated_models/transformer or absolute path to .pt/.pth.")
+    parser.add_argument('--history-len', type=int, default=24, help="History length for transformer model (default: 24).")
+    parser.add_argument('--pred-len', type=int, default=8, help="Prediction length for transformer model (default: 8).")
+    parser.add_argument('--latent-dim', type=int, default=128, help="Latent dimension for transformer model (default: 128).")
+    parser.add_argument('--num-layers', type=int, default=2, help="Autoregressive transformer encoder layers (default: 2).")
+    parser.add_argument('--nhead', type=int, default=4, help="Transformer attention heads (default: 4).")
+    parser.add_argument('--dim-feedforward', type=int, default=256, help="Transformer FFN dim (default: 256).")
+    parser.add_argument('--dropout', type=float, default=0.1, help="Transformer dropout (default: 0.1).")
     parser.add_argument('--length', type=int, required=False, help="Length of the output sequence.")
     args = parser.parse_args()
 
     test = args.test
-    encoder_filepath = 'models/encoder/' + args.encoder + '.pth'
-    predictor_filepath = 'models/predictor/' + args.predictor + '.pth'
+    encoder_filepath = None
+    predictor_filepath = None
+    if args.encoder:
+        encoder_filepath = 'models/encoder/' + args.encoder + '.pth'
+    if args.predictor:
+        predictor_filepath = 'models/predictor/' + args.predictor + '.pth'
 
     folder_path = "LAFAN1_Retargeting_Dataset/g1/"
     motions = get_walking_filenames_in_folder(folder_path)
     normalize = False
     in_channels = 1
-    input_frames = 15
+    input_frames = 15 if test != 'transformer_autoregressive' else args.history_len
     pred_length = 1
     in_size = (input_frames, 36)
-    latent_dim = 128
+    latent_dim = args.latent_dim
     batch_size = 15
 
     dataset = RobotMovementDataset(filenames=motions, input_len=input_frames, output_len=input_frames, device=DEVICE, normalize=normalize, reconstruct=reconstruct)
     output_length = args.length if args.length else len(dataset.raw_data)
 
-    encoder = LinearVAE(in_size=in_size, in_channels=in_channels, latent_dim=latent_dim, context_dim=0, device=DEVICE)
-    predictor = LatentMLP(latent_dim=latent_dim, device=DEVICE)
-    encoder.load_state_dict(torch.load(encoder_filepath, weights_only=True))
-    predictor.load_state_dict(torch.load(predictor_filepath, weights_only=True))
-    encoder.to(DEVICE)
-    predictor.to(DEVICE)
+    encoder = None
+    predictor = None
+    transformer_ar = None
+
+    if test in ('predict', 'random', 'reconstruct'):
+        if not args.encoder:
+            print("Error: --encoder is required for predict/random/reconstruct.")
+            sys.exit(1)
+
+        encoder = LinearVAE(in_size=in_size, in_channels=in_channels, latent_dim=latent_dim, context_dim=0, device=DEVICE)
+        encoder.load_state_dict(torch.load(encoder_filepath, weights_only=True))
+        encoder.to(DEVICE)
+
+        if test == 'predict':
+            if not args.predictor:
+                print("Error: --predictor is required for --test predict.")
+                sys.exit(1)
+            predictor = LatentMLP(latent_dim=latent_dim, device=DEVICE)
+            predictor.load_state_dict(torch.load(predictor_filepath, weights_only=True))
+            predictor.to(DEVICE)
+
+    if test == 'transformer_autoregressive':
+        if not args.transformer:
+            print("Error: --transformer is required for --test transformer_autoregressive.")
+            sys.exit(1)
+
+        transformer_path = args.transformer
+        if not os.path.isabs(transformer_path):
+            transformer_path = os.path.join('generated_models/transformer', transformer_path)
+
+        transformer_ar = TransformerPredictorAutoregressive(
+            history_len=args.history_len,
+            pred_len=args.pred_len,
+            joint_dim=36,
+            latent_dim=args.latent_dim,
+            num_layers=args.num_layers,
+            nhead=args.nhead,
+            dim_feedforward=args.dim_feedforward,
+            dropout=args.dropout,
+            use_teacher_forcing=False,
+            device=DEVICE,
+        )
+        transformer_ar.load_state_dict(torch.load(transformer_path, weights_only=True, map_location=DEVICE))
+        transformer_ar.to(DEVICE)
     
     current_time_str = datetime.now().strftime('%Y-%m-%d_%H-%M')
     
@@ -196,6 +288,14 @@ if __name__ == "__main__":
         case 'reconstruct':
             out_filepath = 'LAFAN1_Retargeting_Dataset/g1/reconstruct/demonstrate_' + current_time_str + '.csv'
             samples = reconstruct(encoder, dataset.raw_data[:output_length], dataset, normalize, device=DEVICE)
+        case 'transformer_autoregressive':
+            out_filepath = 'LAFAN1_Retargeting_Dataset/g1/predict/transformer_autoregressive_' + current_time_str + '.csv'
+            samples = predict_transformer_autoregressive(
+                transformer_ar,
+                dataset.raw_data[:output_length],
+                history_len=args.history_len,
+                device=DEVICE,
+            )
         case _:
             print(f"Unknown test type: {test}")
             sys.exit(1)
